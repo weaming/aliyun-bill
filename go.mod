@@ -1,4 +1,4 @@
-module aliyun-cli
+module aliyun-bill
 
 go 1.25.0
 
