@@ -381,14 +381,7 @@ func aggregateDaily(items []*bssopenapi.QueryBillResponseBodyDataItemsItem) []da
 	groups := make(map[key]*dayProduct)
 
 	for _, item := range items {
-		usageStart := dara.StringValue(item.UsageStartTime)
-		date := usageStart
-		if len(usageStart) >= 10 {
-			date = usageStart[:10]
-		}
-		if date == "" {
-			date = "未知"
-		}
+		date := pickDate(item)
 
 		code := dara.StringValue(item.ProductCode)
 		if code == "" {
@@ -428,6 +421,16 @@ func aggregateDaily(items []*bssopenapi.QueryBillResponseBodyDataItemsItem) []da
 	})
 
 	return result
+}
+
+// pickDate 从账单项中提取日期，依次尝试 UsageStartTime → UsageEndTime → PaymentTime
+func pickDate(item *bssopenapi.QueryBillResponseBodyDataItemsItem) string {
+	for _, f := range []*string{item.UsageStartTime, item.UsageEndTime, item.PaymentTime} {
+		if f != nil && len(*f) >= 10 {
+			return (*f)[:10]
+		}
+	}
+	return "未知"
 }
 
 func convertItems(items []*bssopenapi.DescribeInstanceBillResponseBodyDataItems) []billItem {
