@@ -32,6 +32,7 @@ type trafficPackage struct {
 
 type trafficUsage struct {
 	deductDate         string
+	packageInstanceID  string
 	deductedInstanceID string
 	deductedProduct    string
 	region             string
@@ -181,17 +182,22 @@ func fetchAllTrafficUsage(client *bssopenapi.Client, instanceID string, month st
 	if err != nil {
 		return nil, err
 	}
+	return fetchTrafficUsageRange(client, instanceID, startTime, endTime)
+}
 
+func fetchTrafficUsageRange(client *bssopenapi.Client, instanceID string, startTime string, endTime string) ([]trafficUsage, error) {
 	var result []trafficUsage
 	lastToken := ""
 	for {
 		request := &bssopenapi.QueryDPUtilizationDetailRequest{
-			InstanceId:   dara.String(instanceID),
 			ProdCode:     dara.String(trafficPackageProductCode),
 			StartTime:    dara.String(startTime),
 			EndTime:      dara.String(endTime),
 			IncludeShare: dara.Bool(false),
 			Limit:        dara.Int32(300),
+		}
+		if instanceID != "" {
+			request.InstanceId = dara.String(instanceID)
 		}
 		if lastToken != "" {
 			request.LastToken = dara.String(lastToken)
@@ -237,6 +243,7 @@ func convertTrafficUsage(item *bssopenapi.QueryDPUtilizationDetailResponseBodyDa
 
 	return trafficUsage{
 		deductDate:         dara.StringValue(item.DeductDate),
+		packageInstanceID:  dara.StringValue(item.InstanceId),
 		deductedInstanceID: dara.StringValue(item.DeductedInstanceId),
 		deductedProduct:    dara.StringValue(item.DeductedProductDetail),
 		region:             dara.StringValue(item.Region),

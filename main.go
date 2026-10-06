@@ -442,45 +442,23 @@ func (m model) startQuery() (tea.Model, tea.Cmd) {
 func loadDataCmd(client *bssopenapi.Client, month string) tea.Cmd {
 	return func() tea.Msg {
 		fmt.Fprintf(os.Stderr, "[DEBUG] 开始查询 %s\n", month)
-
-		rawItems, err := fetchAllBills(client, month)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[DEBUG] QueryBill 错误: %v\n", err)
-			return dataLoadedMsg{err: err}
+		result := loadDataSync(client, month)
+		if result.err != nil {
+			fmt.Fprintf(os.Stderr, "[DEBUG] 账单数据查询错误: %v\n", result.err)
+			return dataLoadedMsg{err: result.err}
 		}
-		fmt.Fprintf(os.Stderr, "[DEBUG] QueryBill 返回 %d 条记录\n", len(rawItems))
-
-		daily := aggregateDaily(rawItems)
-		fmt.Fprintf(os.Stderr, "[DEBUG] 聚合后 %d 条每日记录\n", len(daily))
-
-		instItems, err := fetchAllInstanceBills(client, month)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[DEBUG] DescribeInstanceBill 错误: %v\n", err)
-			return dataLoadedMsg{err: err}
+		fmt.Fprintf(os.Stderr, "[DEBUG] 聚合后 %d 条每日记录，%d 条消费项，%d 个流量包\n",
+			len(result.daily), len(result.items), len(result.trafficPackages))
+		if result.trafficErr != nil {
+			fmt.Fprintf(os.Stderr, "[DEBUG] QueryResourcePackageInstances 错误: %v\n", result.trafficErr)
 		}
-		fmt.Fprintf(os.Stderr, "[DEBUG] DescribeInstanceBill 返回 %d 条记录\n", len(instItems))
-
-		items := convertItems(instItems)
-		trafficPackages, trafficErr := fetchAllTrafficPackages(client)
-		if trafficErr != nil {
-			fmt.Fprintf(os.Stderr, "[DEBUG] QueryResourcePackageInstances 错误: %v\n", trafficErr)
-		} else {
-			fmt.Fprintf(os.Stderr, "[DEBUG] QueryResourcePackageInstances 返回 %d 条记录\n", len(trafficPackages))
-		}
-
-		var total float32
-		for _, d := range daily {
-			total += d.pretaxAmount
-		}
-
-		fmt.Fprintf(os.Stderr, "[DEBUG] 月合计: ¥%.2f\n", total)
 
 		return dataLoadedMsg{
-			daily:           daily,
-			items:           items,
-			totalAmount:     total,
-			trafficPackages: trafficPackages,
-			trafficErr:      trafficErr,
+			daily:           result.daily,
+			items:           result.items,
+			totalAmount:     result.total,
+			trafficPackages: result.trafficPackages,
+			trafficErr:      result.trafficErr,
 		}
 	}
 }
@@ -1047,6 +1025,14 @@ func createClient() (*bssopenapi.Client, error) {
 // ─── 主函数 ────────────────────────────────────────────────
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "xbar" {
+		if err := runXbar(); err != nil {
+			fmt.Printf("阿里云查询失败 | color=red\n---\n%s\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	m := initialModel()
 
 	// If a month argument is given, auto-query
@@ -1104,18 +1090,47 @@ type loadResult struct {
 }
 
 func loadDataSync(client *bssopenapi.Client, month string) loadResult {
-	rawItems, err := fetchAllBills(client, month)
-	if err != nil {
-		return loadResult{err: err}
+	type billsResult struct {
+		items []*bssopenapi.QueryBillResponseBodyDataItemsItem
+		err   error
 	}
-	daily := aggregateDaily(rawItems)
+	type instanceBillsResult struct {
+		items []*bssopenapi.DescribeInstanceBillResponseBodyDataItems
+		err   error
+	}
+	type trafficPackagesResult struct {
+		items []trafficPackage
+		err   error
+	}
 
-	instItems, err := fetchAllInstanceBills(client, month)
-	if err != nil {
-		return loadResult{err: err}
+	billsCh := make(chan billsResult, 1)
+	instanceBillsCh := make(chan instanceBillsResult, 1)
+	trafficPackagesCh := make(chan trafficPackagesResult, 1)
+	go func() {
+		items, err := fetchAllBills(client, month)
+		billsCh <- billsResult{items: items, err: err}
+	}()
+	go func() {
+		items, err := fetchAllInstanceBills(client, month)
+		instanceBillsCh <- instanceBillsResult{items: items, err: err}
+	}()
+	go func() {
+		items, err := fetchAllTrafficPackages(client)
+		trafficPackagesCh <- trafficPackagesResult{items: items, err: err}
+	}()
+
+	bills := <-billsCh
+	if bills.err != nil {
+		return loadResult{err: bills.err}
 	}
-	items := convertItems(instItems)
-	trafficPackages, trafficErr := fetchAllTrafficPackages(client)
+	instanceBills := <-instanceBillsCh
+	if instanceBills.err != nil {
+		return loadResult{err: instanceBills.err}
+	}
+	trafficResult := <-trafficPackagesCh
+
+	daily := aggregateDaily(bills.items)
+	items := convertItems(instanceBills.items)
 
 	var total float32
 	for _, d := range daily {
@@ -1126,7 +1141,7 @@ func loadDataSync(client *bssopenapi.Client, month string) loadResult {
 		daily:           daily,
 		items:           items,
 		total:           total,
-		trafficPackages: trafficPackages,
-		trafficErr:      trafficErr,
+		trafficPackages: trafficResult.items,
+		trafficErr:      trafficResult.err,
 	}
 }

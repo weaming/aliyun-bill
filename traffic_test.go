@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -84,5 +85,30 @@ func TestSortTrafficPackagesPutsEmptyPackagesLast(t *testing.T) {
 	sortTrafficPackages(packages)
 	if packages[0].instanceID != "available" || packages[1].instanceID != "empty" {
 		t.Fatalf("流量包排序错误: %#v", packages)
+	}
+}
+
+func TestParseTrafficUsageTime(t *testing.T) {
+	parsed, err := parseTrafficUsageTime("2026-10-06T22:26Z")
+	if err != nil {
+		t.Fatalf("解析实际 API 时间失败: %v", err)
+	}
+	if parsed.Year() != 2026 || parsed.Month() != time.October || parsed.Day() != 6 {
+		t.Fatalf("解析时间结果错误: %v", parsed)
+	}
+}
+
+func TestBuildXbarTrafficPeriods(t *testing.T) {
+	location := currentLocation()
+	now := time.Date(2026, 10, 6, 12, 30, 0, 0, location)
+	periods := buildXbarTrafficPeriods(now)
+	if len(periods) != 5 {
+		t.Fatalf("流量时间段数量错误: %d", len(periods))
+	}
+	if periods[0].start.Format("2006-01-02") != "2026-09-01" {
+		t.Fatalf("上月开始时间错误: %s", periods[0].start)
+	}
+	if periods[4].start.Format("2006-01-02") != "2026-10-06" {
+		t.Fatalf("今天开始时间错误: %s", periods[4].start)
 	}
 }
