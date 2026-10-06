@@ -93,17 +93,25 @@ type model struct {
 	cursorOn   bool
 
 	// 标签页
-	activeTab int // 0=每日按产品, 1=消费项明细
+	activeTab int // 0=每日按产品, 1=消费项明细, 2=流量包
 
 	// 数据
-	month       string
-	dailyData   []dayProduct // 每日×产品 二维聚合
-	itemData    []billItem   // 按实例/消费项数据
-	totalAmount float32
+	month                string
+	dailyData            []dayProduct // 每日×产品 二维聚合
+	itemData             []billItem   // 按实例/消费项数据
+	totalAmount          float32
+	trafficPackages      []trafficPackage
+	trafficDetails       []trafficUsage
+	trafficError         string
+	trafficDetailError   string
+	trafficDetailLoading bool
+	showTrafficDetails   bool
+	trafficDetailOffset  int
 
 	// 滚动
-	itemOffset int
-	pageSize   int
+	itemOffset    int
+	packageOffset int
+	pageSize      int
 
 	// 调试
 	debug bool
@@ -122,7 +130,7 @@ func initialModel() model {
 
 // currentMonth returns "YYYY-MM" for the current local time.
 func currentMonth() string {
-	now := time.Now()
+	now := time.Now().In(currentLocation())
 	return fmt.Sprintf("%04d-%02d", now.Year(), now.Month())
 }
 
@@ -153,10 +161,12 @@ func (m model) Init() tea.Cmd {
 
 type cursorTickMsg struct{}
 type dataLoadedMsg struct {
-	daily       []dayProduct
-	items       []billItem
-	totalAmount float32
-	err         error
+	daily           []dayProduct
+	items           []billItem
+	totalAmount     float32
+	trafficPackages []trafficPackage
+	trafficErr      error
+	err             error
 }
 
 // ─── 更新 ───────────────────────────────────────────────────
@@ -166,6 +176,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyCtrlC, tea.KeyEsc:
+			if m.showTrafficDetails {
+				m.showTrafficDetails = false
+				m.trafficDetailError = ""
+				m.trafficDetails = nil
+				m.trafficDetailOffset = 0
+				return m, nil
+			}
 			if m.view != "input" {
 				m.view = "input"
 				m.errorMsg = ""
@@ -178,22 +195,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.view == "input" {
 				return m.startQuery()
 			}
+			if m.view == "data" && m.activeTab == 2 && !m.showTrafficDetails {
+				return m.startTrafficDetail()
+			}
 
 		case tea.KeyLeft:
 			if m.view == "data" && m.activeTab > 0 {
 				m.activeTab--
 			}
 		case tea.KeyRight:
-			if m.view == "data" && m.activeTab < 1 {
+			if m.view == "data" && m.activeTab < 2 {
 				m.activeTab++
 			}
 
 		case tea.KeyUp:
-			if m.view == "data" && m.activeTab == 1 && m.itemOffset > 0 {
-				m.itemOffset--
+			if m.view == "data" && !m.showTrafficDetails {
+				if m.activeTab == 1 && m.itemOffset > 0 {
+					m.itemOffset--
+				}
+				if m.activeTab == 2 && m.packageOffset > 0 {
+					m.packageOffset--
+				}
+			}
+			if m.view == "data" && m.showTrafficDetails && m.trafficDetailOffset > 0 {
+				m.trafficDetailOffset--
 			}
 		case tea.KeyDown:
-			if m.view == "data" && m.activeTab == 1 {
+			if m.view == "data" && !m.showTrafficDetails && m.activeTab == 1 {
 				maxOffset := len(m.itemData) - m.pageSize
 				if maxOffset < 0 {
 					maxOffset = 0
@@ -202,15 +230,45 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.itemOffset++
 				}
 			}
+			if m.view == "data" && !m.showTrafficDetails && m.activeTab == 2 {
+				maxOffset := len(m.trafficPackages) - 1
+				if maxOffset < 0 {
+					maxOffset = 0
+				}
+				if m.packageOffset < maxOffset {
+					m.packageOffset++
+				}
+			}
+			if m.view == "data" && m.showTrafficDetails {
+				maxOffset := len(m.trafficDetails) - m.pageSize
+				if maxOffset < 0 {
+					maxOffset = 0
+				}
+				if m.trafficDetailOffset < maxOffset {
+					m.trafficDetailOffset++
+				}
+			}
 		case tea.KeyPgUp:
-			if m.view == "data" && m.activeTab == 1 {
+			if m.view == "data" && !m.showTrafficDetails && m.activeTab == 1 {
 				m.itemOffset -= m.pageSize
 				if m.itemOffset < 0 {
 					m.itemOffset = 0
 				}
 			}
+			if m.view == "data" && !m.showTrafficDetails && m.activeTab == 2 {
+				m.packageOffset -= m.pageSize
+				if m.packageOffset < 0 {
+					m.packageOffset = 0
+				}
+			}
+			if m.view == "data" && m.showTrafficDetails {
+				m.trafficDetailOffset -= m.pageSize
+				if m.trafficDetailOffset < 0 {
+					m.trafficDetailOffset = 0
+				}
+			}
 		case tea.KeyPgDown:
-			if m.view == "data" && m.activeTab == 1 {
+			if m.view == "data" && !m.showTrafficDetails && m.activeTab == 1 {
 				maxOffset := len(m.itemData) - m.pageSize
 				if maxOffset < 0 {
 					maxOffset = 0
@@ -218,6 +276,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.itemOffset += m.pageSize
 				if m.itemOffset > maxOffset {
 					m.itemOffset = maxOffset
+				}
+			}
+			if m.view == "data" && !m.showTrafficDetails && m.activeTab == 2 {
+				maxOffset := len(m.trafficPackages) - 1
+				if maxOffset < 0 {
+					maxOffset = 0
+				}
+				m.packageOffset += m.pageSize
+				if m.packageOffset > maxOffset {
+					m.packageOffset = maxOffset
+				}
+			}
+			if m.view == "data" && m.showTrafficDetails {
+				maxOffset := len(m.trafficDetails) - m.pageSize
+				if maxOffset < 0 {
+					maxOffset = 0
+				}
+				m.trafficDetailOffset += m.pageSize
+				if m.trafficDetailOffset > maxOffset {
+					m.trafficDetailOffset = maxOffset
 				}
 			}
 		}
@@ -236,8 +314,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.view == "data" {
 				m.activeTab = 1
 			}
+		case "3":
+			if m.view == "data" {
+				m.activeTab = 2
+			}
 		case "r":
 			if m.view == "data" && m.month != "" {
+				if m.showTrafficDetails {
+					return m.startTrafficDetail()
+				}
 				m.view = "loading"
 				m.statusMsg = "正在刷新..."
 				return m, loadDataCmd(m.client, m.month)
@@ -271,7 +356,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(m.inputValue) > 0 {
 					m.inputValue = m.inputValue[:len(m.inputValue)-1]
 				}
-			case "enter", "esc", "q", "d", "f", "1", "2", "r":
+			case "enter", "esc", "q", "d", "f", "1", "2", "3", "r":
 				// handled above
 			default:
 				if len(msg.String()) == 1 && len(m.inputValue) < 7 {
@@ -292,18 +377,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.errorMsg = fmt.Sprintf("数据加载失败: %v", msg.err)
 			m.view = "input"
-		} else if len(msg.daily) == 0 && len(msg.items) == 0 {
-			m.errorMsg = "该月份无账单数据"
+		} else if len(msg.daily) == 0 && len(msg.items) == 0 && len(msg.trafficPackages) == 0 {
+			m.errorMsg = "该月份无账单数据，也没有有效流量包"
 			m.view = "input"
 		} else {
 			m.dailyData = msg.daily
 			m.itemData = msg.items
 			m.totalAmount = msg.totalAmount
+			m.trafficPackages = msg.trafficPackages
+			m.trafficError = ""
+			if msg.trafficErr != nil {
+				m.trafficError = msg.trafficErr.Error()
+			}
 			m.month = m.inputValue
 			m.view = "data"
 			m.statusMsg = ""
 			m.itemOffset = 0
+			m.packageOffset = 0
+			m.showTrafficDetails = false
+			m.trafficDetails = nil
+			m.trafficDetailError = ""
+			m.trafficDetailOffset = 0
 		}
+	case trafficDetailsLoadedMsg:
+		m.trafficDetailLoading = false
+		if msg.err != nil {
+			m.trafficDetailError = msg.err.Error()
+			return m, nil
+		}
+		m.trafficDetails = msg.details
+		m.trafficDetailError = ""
 	}
 
 	return m, nil
@@ -327,6 +430,10 @@ func (m model) startQuery() (tea.Model, tea.Cmd) {
 	m.errorMsg = ""
 	m.statusMsg = fmt.Sprintf("正在查询 %s 账单数据...", month)
 	m.itemOffset = 0
+	m.packageOffset = 0
+	m.showTrafficDetails = false
+	m.trafficDetails = nil
+	m.trafficDetailOffset = 0
 	m.view = "loading"
 
 	return m, loadDataCmd(m.client, month)
@@ -354,6 +461,12 @@ func loadDataCmd(client *bssopenapi.Client, month string) tea.Cmd {
 		fmt.Fprintf(os.Stderr, "[DEBUG] DescribeInstanceBill 返回 %d 条记录\n", len(instItems))
 
 		items := convertItems(instItems)
+		trafficPackages, trafficErr := fetchAllTrafficPackages(client)
+		if trafficErr != nil {
+			fmt.Fprintf(os.Stderr, "[DEBUG] QueryResourcePackageInstances 错误: %v\n", trafficErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "[DEBUG] QueryResourcePackageInstances 返回 %d 条记录\n", len(trafficPackages))
+		}
 
 		var total float32
 		for _, d := range daily {
@@ -363,9 +476,11 @@ func loadDataCmd(client *bssopenapi.Client, month string) tea.Cmd {
 		fmt.Fprintf(os.Stderr, "[DEBUG] 月合计: ¥%.2f\n", total)
 
 		return dataLoadedMsg{
-			daily:       daily,
-			items:       items,
-			totalAmount: total,
+			daily:           daily,
+			items:           items,
+			totalAmount:     total,
+			trafficPackages: trafficPackages,
+			trafficErr:      trafficErr,
 		}
 	}
 }
@@ -510,7 +625,7 @@ func (m model) viewData() string {
 	b.WriteString("\n")
 
 	// 标签页
-	tabs := []string{"每日消费", "消费项明细"}
+	tabs := []string{"每日消费", "消费项明细", "流量包"}
 	for i, tab := range tabs {
 		if i == m.activeTab {
 			b.WriteString(tabActiveStyle.Render(tab))
@@ -533,12 +648,21 @@ func (m model) viewData() string {
 	// 渲染当前标签页内容
 	if m.activeTab == 0 {
 		b.WriteString(m.renderDailyTable())
-	} else {
+	} else if m.activeTab == 1 {
 		b.WriteString(m.renderItemTable())
+	} else {
+		b.WriteString(m.renderTrafficTable())
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(helpStyle.Render("←→切换 | ↑↓翻页 | d/f上月/下月 | r刷新 | q退出"))
+	help := "←→切换 | d/f上月/下月 | r刷新 | q退出"
+	if m.activeTab == 2 && !m.showTrafficDetails {
+		help = "←→切换 | ↑↓选择流量包 | Enter查看明细 | d/f切换月份 | r刷新 | q退出"
+	}
+	if m.showTrafficDetails {
+		help = "Esc返回流量包列表 | r刷新明细 | q退出"
+	}
+	b.WriteString(helpStyle.Render(help))
 	return b.String()
 }
 
@@ -946,12 +1070,16 @@ func main() {
 				fmt.Fprintf(os.Stderr, "查询失败: %v\n", res.err)
 				os.Exit(1)
 			}
-			if len(res.daily) == 0 && len(res.items) == 0 {
+			if len(res.daily) == 0 && len(res.items) == 0 && len(res.trafficPackages) == 0 {
 				fmt.Fprintln(os.Stderr, "该月份无账单数据")
 			}
 			m.dailyData = res.daily
 			m.itemData = res.items
 			m.totalAmount = res.total
+			m.trafficPackages = res.trafficPackages
+			if res.trafficErr != nil {
+				m.trafficError = res.trafficErr.Error()
+			}
 			m.view = "data"
 		} else {
 			fmt.Fprintf(os.Stderr, "月份格式错误: %s (应为 YYYY-MM)\n", month)
@@ -967,10 +1095,12 @@ func main() {
 }
 
 type loadResult struct {
-	daily []dayProduct
-	items []billItem
-	total float32
-	err   error
+	daily           []dayProduct
+	items           []billItem
+	total           float32
+	trafficPackages []trafficPackage
+	trafficErr      error
+	err             error
 }
 
 func loadDataSync(client *bssopenapi.Client, month string) loadResult {
@@ -985,11 +1115,18 @@ func loadDataSync(client *bssopenapi.Client, month string) loadResult {
 		return loadResult{err: err}
 	}
 	items := convertItems(instItems)
+	trafficPackages, trafficErr := fetchAllTrafficPackages(client)
 
 	var total float32
 	for _, d := range daily {
 		total += d.pretaxAmount
 	}
 
-	return loadResult{daily: daily, items: items, total: total}
+	return loadResult{
+		daily:           daily,
+		items:           items,
+		total:           total,
+		trafficPackages: trafficPackages,
+		trafficErr:      trafficErr,
+	}
 }

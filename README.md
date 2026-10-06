@@ -11,6 +11,8 @@ export ALI_KEY_ID="your-access-key-id"
 export ALI_KEY_SECRET="your-access-key-secret"
 ```
 
+流量包功能需要 RAM 权限 `bss:DescribeInstances` 和 `bss:FrDeductLogQueryRequest`。
+
 ### 运行
 
 ```bash
@@ -26,14 +28,17 @@ export ALI_KEY_SECRET="your-access-key-secret"
 | 键 | 操作 |
 |---|---|
 | `Enter` | 查询 |
-| `← →` / `1 2` | 切换标签 (每日消费 / 消费项明细) |
+| `← →` / `1 2 3` | 切换标签 (每日消费 / 消费项明细 / 流量包) |
 | `↑ ↓` | 逐行翻页 |
 | `PgUp PgDn` | 整页翻页 |
 | `d` / `f` | 上月 / 下月 (输入模式和数据模式均可) |
 | `r` | 刷新当前月份 |
+| `Enter`（流量包页） | 查看选中流量包在当前月份的抵扣明细 |
+| `Esc`（明细页） | 返回流量包列表 |
 | `q` / `Ctrl+C` / `Esc` | 返回输入 / 退出 |
 
 ## 功能
 
 - **每日消费**: 按天+产品维度展示消费明细，显示每日各产品消费和日合计
 - **消费项明细**: 按产品聚合展示实例/计费项消费汇总，支持分页浏览
+- **流量包**: 区分全时/闲时流量包，按剩余量排序（余量为 0 的排最后），显示总量、剩余量、已用量和到期时间；可按当前账单月份查看 ECS、EIP、CLB 等抵扣明细
