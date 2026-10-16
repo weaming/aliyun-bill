@@ -25,6 +25,7 @@ type xbarTrafficPeriod struct {
 type xbarSnapshot struct {
 	currentBill  float64
 	previousBill float64
+	remaining    xbarTrafficSummary
 	periods      []xbarTrafficPeriod
 }
 
@@ -105,9 +106,30 @@ func runXbar() error {
 	printXbarSnapshot(xbarSnapshot{
 		currentBill:  currentBillResult.value,
 		previousBill: previousBillResult.value,
+		remaining:    summarizeTrafficPackageRemaining(packagesResult.value),
 		periods:      periods,
 	})
 	return nil
+}
+
+func summarizeTrafficPackageRemaining(packages []trafficPackage) xbarTrafficSummary {
+	var summary xbarTrafficSummary
+	for _, item := range packages {
+		remaining := item.remainingAmount
+		if remaining <= 0 {
+			continue
+		}
+		remainingBytes := trafficAmountToBytes(remaining, item.remainingUnit)
+		switch item.packageKind {
+		case "全时":
+			summary.fullTime += remainingBytes
+		case "闲时":
+			summary.offPeak += remainingBytes
+		default:
+			summary.other += remainingBytes
+		}
+	}
+	return summary
 }
 
 func fetchBillTotal(client *bssopenapi.Client, billingCycle string) (float64, error) {
@@ -203,6 +225,11 @@ func printXbarSnapshot(snapshot xbarSnapshot) {
 	fmt.Printf("上月 ¥%.2f\n", snapshot.previousBill)
 	fmt.Println("---")
 	fmt.Println("流量包使用")
+	remainingTotal := snapshot.remaining.fullTime + snapshot.remaining.offPeak + snapshot.remaining.other
+	fmt.Printf("剩余 全 %s 闲 %s 总 %s\n",
+		formatBytesCompact(snapshot.remaining.fullTime),
+		formatBytesCompact(snapshot.remaining.offPeak),
+		formatBytesCompact(remainingTotal))
 	for index := len(snapshot.periods) - 1; index >= 0; index-- {
 		period := snapshot.periods[index]
 		total := period.summary.fullTime + period.summary.offPeak + period.summary.other

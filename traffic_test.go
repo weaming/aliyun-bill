@@ -41,6 +41,15 @@ func TestFormatBytes(t *testing.T) {
 	}
 }
 
+func TestTrafficAmountToBytes(t *testing.T) {
+	if got := trafficAmountToBytes(1, "GB"); got != 1024*1024*1024 {
+		t.Fatalf("GB 换算错误: %v", got)
+	}
+	if got := trafficAmountToBytes(2, "MB"); got != 2*1024*1024 {
+		t.Fatalf("MB 换算错误: %v", got)
+	}
+}
+
 func TestTrafficPackageSelectionMovesWithinPackageList(t *testing.T) {
 	modelState := model{
 		view:      "data",

@@ -441,6 +441,28 @@ func formatBytes(value float64) string {
 	return fmt.Sprintf("%.2f %s", value, units[unitIndex])
 }
 
+func trafficAmountToBytes(value float64, unit string) float64 {
+	unit = strings.ToUpper(strings.TrimSpace(unit))
+	unit = strings.TrimSuffix(unit, "IB")
+	unit = strings.TrimSuffix(unit, "B")
+
+	unitIndex := 0
+	switch unit {
+	case "K":
+		unitIndex = 1
+	case "M":
+		unitIndex = 2
+	case "G":
+		unitIndex = 3
+	case "T":
+		unitIndex = 4
+	case "P":
+		unitIndex = 5
+	}
+
+	return value * math.Pow(1024, float64(unitIndex))
+}
+
 func minInt(left int, right int) int {
 	if left < right {
 		return left
